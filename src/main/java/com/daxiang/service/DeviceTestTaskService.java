@@ -50,9 +50,10 @@ public class DeviceTestTaskService {
 
     public List<DeviceTestTask> getDeviceTestTasks(DeviceTestTask query, String orderBy) {
         DeviceTestTaskExample example = new DeviceTestTaskExample();
-        DeviceTestTaskExample.Criteria criteria = example.createCriteria();
 
         if (query != null) {
+            DeviceTestTaskExample.Criteria criteria = example.createCriteria();
+
             if (query.getId() != null) {
                 criteria.andIdEqualTo(query.getId());
             }
@@ -99,19 +100,17 @@ public class DeviceTestTaskService {
 
         deviceTestTask.getTestcases().stream()
                 .filter(testcase -> testcase.getId().equals(sourceTestcase.getId()))
-                .forEach(testcase -> {
+                .findFirst()
+                .ifPresent(testcase -> {
                     // 更新testcase运行结果
                     copyTestcaseProperties(sourceTestcase, testcase);
-                    List<Step> sourceSteps = sourceTestcase.getSteps();
-                    if (!CollectionUtils.isEmpty(sourceSteps)) {
-                        // 每次agent只会传1个要更新的步骤
-                        Step sourceStep = sourceSteps.get(0);
-                        testcase.getSteps().stream()
-                                .filter(step -> step.getNumber().equals(sourceStep.getNumber()))
-                                .forEach(step -> {
-                                    // 更新step运行结果
-                                    copyStepProperties(sourceStep, step);
-                                });
+
+                    if (!CollectionUtils.isEmpty(sourceTestcase.getSteps())) {
+                        updateSteps(testcase.getSteps(), sourceTestcase.getSteps().get(0));
+                    } else if (!CollectionUtils.isEmpty(sourceTestcase.getSetUp())) {
+                        updateSteps(testcase.getSetUp(), sourceTestcase.getSetUp().get(0));
+                    } else if (!CollectionUtils.isEmpty(sourceTestcase.getTearDown())) {
+                        updateSteps(testcase.getTearDown(), sourceTestcase.getTearDown().get(0));
                     }
                 });
 
@@ -119,6 +118,16 @@ public class DeviceTestTaskService {
         if (updateCount != 1) {
             throw new ServerException("更新失败，请稍后重试");
         }
+    }
+
+    private void updateSteps(List<Step> steps, Step sourceStep) {
+        steps.stream()
+                .filter(step -> step.getNumber().equals(sourceStep.getNumber()))
+                .findFirst()
+                .ifPresent(step -> {
+                    // 更新step运行结果
+                    copyStepProperties(sourceStep, step);
+                });
     }
 
     private void copyStepProperties(Step sourceStep, Step targetStep) {
@@ -148,6 +157,9 @@ public class DeviceTestTaskService {
         }
         if (!StringUtils.isEmpty(sourceTestcase.getVideoPath())) {
             targetTestcase.setVideoPath(sourceTestcase.getVideoPath());
+        }
+        if (!StringUtils.isEmpty(sourceTestcase.getLogPath())) {
+            targetTestcase.setLogPath(sourceTestcase.getLogPath());
         }
     }
 
@@ -215,6 +227,7 @@ public class DeviceTestTaskService {
             testcases.forEach(testcase -> {
                 fileService.deleteQuietly(testcase.getFailImgPath());
                 fileService.deleteQuietly(testcase.getVideoPath());
+                fileService.deleteQuietly(testcase.getLogPath());
             });
         }
     }

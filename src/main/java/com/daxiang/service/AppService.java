@@ -7,6 +7,7 @@ import com.daxiang.mbg.po.App;
 import com.daxiang.mbg.po.AppExample;
 import com.daxiang.mbg.po.User;
 import com.daxiang.model.*;
+import com.daxiang.model.enums.UploadDir;
 import com.daxiang.model.vo.AgentVo;
 import com.daxiang.model.vo.AppVo;
 import com.daxiang.security.SecurityUtil;
@@ -43,7 +44,7 @@ public class AppService {
     private FileService fileService;
 
     public void upload(App app, MultipartFile file) {
-        UploadFile uploadFile = fileService.upload(file, FileType.APP);
+        UploadFile uploadFile = fileService.upload(file, UploadDir.APP);
 
         app.setFilePath(uploadFile.getFilePath());
         app.setUploadTime(new Date());
@@ -127,9 +128,10 @@ public class AppService {
 
     public List<App> getApps(App query, String orderBy) {
         AppExample example = new AppExample();
-        AppExample.Criteria criteria = example.createCriteria();
 
         if (query != null) {
+            AppExample.Criteria criteria = example.createCriteria();
+
             if (query.getId() != null) {
                 criteria.andIdEqualTo(query.getId());
             }

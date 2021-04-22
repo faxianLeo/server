@@ -4,6 +4,7 @@ import com.daxiang.dao.PageDao;
 import com.daxiang.exception.ServerException;
 import com.daxiang.mbg.po.*;
 import com.daxiang.model.PagedData;
+import com.daxiang.model.enums.UploadDir;
 import com.daxiang.security.SecurityUtil;
 import com.github.pagehelper.PageHelper;
 import com.daxiang.mbg.mapper.PageMapper;
@@ -19,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -49,7 +51,7 @@ public class PageService {
         String originalImgPath = page.getImgPath();
         String destImgPath = null;
         if (!StringUtils.isEmpty(originalImgPath)) {
-            destImgPath = FileService.IMG_DIR + "/" + FilenameUtils.getName(originalImgPath);
+            destImgPath = UploadDir.IMG.path + "/" + FilenameUtils.getName(originalImgPath);
             page.setImgPath(destImgPath);
         }
 
@@ -66,6 +68,9 @@ public class PageService {
         if (!StringUtils.isEmpty(destImgPath)) {
             try {
                 fileService.moveFile(originalImgPath, destImgPath);
+            } catch (FileNotFoundException e) {
+                log.info("file not found: {}", originalImgPath);
+                throw new ServerException("图片不存在，该图片可能已保存至其他Page");
             } catch (IOException e) {
                 log.error("move {} -> {} err", originalImgPath, destImgPath, e);
                 throw new ServerException(e.getMessage());
@@ -170,9 +175,10 @@ public class PageService {
 
     public List<Page> getPagesWithoutWindowHierarchy(Page query, String orderBy) {
         PageExample example = new PageExample();
-        PageExample.Criteria criteria = example.createCriteria();
 
         if (query != null) {
+            PageExample.Criteria criteria = example.createCriteria();
+
             if (query.getId() != null) {
                 criteria.andIdEqualTo(query.getId());
             }

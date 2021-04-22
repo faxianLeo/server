@@ -67,6 +67,12 @@ public class MobileService {
             throw new ServerException("删除失败，请稍后重试");
         }
 
+        try {
+            agentClient.deleteMobile(mobile.getAgentIp(), mobile.getAgentPort(), mobileId);
+        } catch (Exception ignore) {
+
+        }
+
         fileService.deleteQuietly(mobile.getImgPath());
     }
 
@@ -93,9 +99,10 @@ public class MobileService {
 
     public List<Mobile> getMobiles(Mobile query, String orderBy) {
         MobileExample example = new MobileExample();
-        MobileExample.Criteria criteria = example.createCriteria();
 
         if (query != null) {
+            MobileExample.Criteria criteria = example.createCriteria();
+
             if (!StringUtils.isEmpty(query.getId())) {
                 criteria.andIdEqualTo(query.getId());
             }

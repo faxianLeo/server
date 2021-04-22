@@ -104,9 +104,7 @@ public class ActionService {
     }
 
     public void update(Action action) {
-        checkStepsNotContainsSelf(action);
-        checkActionImportsNotContainsSelf(action);
-        checkDepensNotContainsSelf(action);
+        checkNotContainsSelf(action);
 
         // action状态变为草稿或禁用
         if (action.getState() != Action.RELEASE_STATE) {
@@ -184,9 +182,10 @@ public class ActionService {
 
     public List<Action> getActions(Action query, String orderBy) {
         ActionExample example = new ActionExample();
-        ActionExample.Criteria criteria = example.createCriteria();
 
         if (query != null) {
+            ActionExample.Criteria criteria = example.createCriteria();
+
             if (query.getId() != null) {
                 criteria.andIdEqualTo(query.getId());
             }
@@ -235,58 +234,70 @@ public class ActionService {
         Map<Integer, Category> categoryMap = categoryService.categoriesToMap(categories);
 
         // actionType : node
-        Map<Integer, ActionTreeNode> rMap = new HashMap<>();
+        Map<Integer, ActionTreeNode> actionTypeNodeMap = new HashMap<>();
         // categoryId : node
-        Map<Integer, ActionTreeNode> cMap = new HashMap<>();
+        Map<Integer, ActionTreeNode> categoryIdNodeMap = new HashMap<>();
 
         for (Action action : actions) {
             // 创建根节点加入到tree，如果没创建过
             Integer actionType = action.getType();
-            ActionTreeNode root = rMap.get(actionType);
+            ActionTreeNode root = actionTypeNodeMap.get(actionType);
             if (root == null) {
                 root = new ActionTreeNode();
                 root.setName(ACTION_TYPE_MAP.get(actionType));
                 root.setChildren(new ArrayList<>());
-                rMap.put(actionType, root);
+
                 tree.add(root);
+                actionTypeNodeMap.put(actionType, root);
             }
 
+            ActionTreeNode actionNode = ActionTreeNode.create(action);
             Integer actionCid = action.getCategoryId();
             if (actionCid == null) {
                 // 无分类的action，放入相应根节点
-                root.getChildren().add(ActionTreeNode.create(action));
+                root.getChildren().add(actionNode);
             } else {
                 // action对应的分类节点
-                ActionTreeNode cNode = cMap.get(actionCid);
+                ActionTreeNode cNode = categoryIdNodeMap.get(actionCid);
                 if (cNode != null) {
                     // action放入相应的分类
-                    cNode.getChildren().add(ActionTreeNode.create(action));
+                    cNode.getChildren().add(actionNode);
                 } else {
-                    cNode = new ActionTreeNode();
                     Category category = categoryMap.get(actionCid);
-                    cNode.setName(category.getName());
-                    List<ActionTreeNode> children = new ArrayList<>();
-                    // action放入相应分类
-                    children.add(ActionTreeNode.create(action));
-                    cNode.setChildren(children);
-                    cMap.put(actionCid, cNode);
 
-                    Integer pid = category.getParentId();
-                    while (pid != null && pid > 0) {
-                        Category parent = categoryMap.get(pid);
-                        ActionTreeNode cpNode = cMap.get(pid);
-                        if (cpNode == null) {
-                            cpNode = new ActionTreeNode();
-                            cpNode.setName(parent.getName());
-                            cpNode.setChildren(new ArrayList<>());
-                            cMap.put(pid, cpNode);
+                    cNode = new ActionTreeNode();
+                    cNode.setName(category.getName());
+                    cNode.setChildren(new ArrayList<>());
+                    // action放入相应分类
+                    cNode.getChildren().add(actionNode);
+                    categoryIdNodeMap.put(actionCid, cNode);
+
+                    boolean cNodeIsRootChildren = true;
+
+                    Integer pCid = category.getParentId();
+                    while (pCid != null && pCid > 0) {
+                        ActionTreeNode pCNode = categoryIdNodeMap.get(pCid);
+                        if (pCNode != null) {
+                            pCNode.getChildren().add(cNode);
+                            cNodeIsRootChildren = false;
+                            break;
                         }
-                        cpNode.getChildren().add(cNode);
-                        cNode = cpNode;
-                        pid = parent.getParentId();
+
+                        Category pCategory = categoryMap.get(pCid);
+
+                        pCNode = new ActionTreeNode();
+                        pCNode.setName(pCategory.getName());
+                        pCNode.setChildren(new ArrayList<>());
+                        pCNode.getChildren().add(cNode);
+                        categoryIdNodeMap.put(pCid, pCNode);
+
+                        cNode = pCNode;
+                        pCid = pCategory.getParentId();
                     }
 
-                    root.getChildren().add(cNode);
+                    if (cNodeIsRootChildren) {
+                        root.getChildren().add(cNode);
+                    }
                 }
             }
         }
@@ -296,10 +307,20 @@ public class ActionService {
 
     public Response debug(ActionDebugRequest actionDebugRequest) {
         Action action = actionDebugRequest.getAction();
-        boolean anyEnabledStep = action.getSteps().stream()
-                .anyMatch(step -> step.getStatus() == Step.ENABLE_STATUS);
+
+        boolean anyEnabledStep = action.getSteps() != null &&
+                action.getSteps().stream().anyMatch(step -> step.getStatus() == Step.ENABLE_STATUS);
+
         if (!anyEnabledStep) {
-            return Response.fail("至少选择一个启用的步骤");
+            boolean anyEnabledSetUpStep = action.getSetUp() != null &&
+                    action.getSetUp().stream().anyMatch(step -> step.getStatus() == Step.ENABLE_STATUS);
+            if (!anyEnabledSetUpStep) {
+                boolean anyEnabledTearDownStep = action.getTearDown() != null &&
+                        action.getTearDown().stream().anyMatch(step -> step.getStatus() == Step.ENABLE_STATUS);
+                if (!anyEnabledTearDownStep) {
+                    return Response.fail("至少选择一个启用的步骤");
+                }
+            }
         }
 
         action.setId(0);
@@ -343,40 +364,39 @@ public class ActionService {
         return actionMapper.selectByExampleWithBLOBs(example);
     }
 
-    /**
-     * 依赖用例不包含自身
-     *
-     * @param action
-     */
-    private void checkDepensNotContainsSelf(Action action) {
-        List<Integer> depends = action.getDepends();
-        if (!CollectionUtils.isEmpty(depends) && depends.contains(action.getId())) {
-            throw new ServerException("依赖用例不能包含自身");
+    private void checkNotContainsSelf(Action action) {
+        List<Step> setUp = action.getSetUp();
+        if (!CollectionUtils.isEmpty(setUp)) {
+            List<Integer> setUpActionIds = setUp.stream()
+                    .map(Step::getActionId).collect(Collectors.toList());
+            if (setUpActionIds.contains(action.getId())) {
+                throw new ServerException("setUp不能包含自身");
+            }
         }
-    }
 
-    /**
-     * 检查步骤不包含自身，防止出现死循环
-     *
-     * @param action
-     */
-    private void checkStepsNotContainsSelf(Action action) {
         List<Integer> stepActionIds = action.getSteps().stream()
                 .map(Step::getActionId).collect(Collectors.toList());
         if (stepActionIds.contains(action.getId())) {
             throw new ServerException("步骤不能包含自身");
         }
-    }
 
-    /**
-     * 导入Action不能包含自身
-     *
-     * @param action
-     */
-    private void checkActionImportsNotContainsSelf(Action action) {
+        List<Step> tearDown = action.getTearDown();
+        if (!CollectionUtils.isEmpty(tearDown)) {
+            List<Integer> tearDownActionIds = tearDown.stream()
+                    .map(Step::getActionId).collect(Collectors.toList());
+            if (tearDownActionIds.contains(action.getId())) {
+                throw new ServerException("tearDown不能包含自身");
+            }
+        }
+
         List<Integer> actionImports = action.getActionImports();
         if (!CollectionUtils.isEmpty(actionImports) && actionImports.contains(action.getId())) {
             throw new ServerException("导入Action不能包含自身");
+        }
+
+        List<Integer> depends = action.getDepends();
+        if (!CollectionUtils.isEmpty(depends) && depends.contains(action.getId())) {
+            throw new ServerException("依赖用例不能包含自身");
         }
     }
 
@@ -390,8 +410,8 @@ public class ActionService {
             throw new ServerException("actionId不能为空");
         }
 
-        // 检查action是否被steps或depends或actionImports使用
-        List<Action> actions = actionDao.selectByActionIdInStepsOrDependsOrActionImports(actionId);
+        // 检查action是否被其他action使用
+        List<Action> actions = actionDao.selectOtherActionsInUse(actionId);
         if (!CollectionUtils.isEmpty(actions)) {
             String actionNames = actions.stream().map(Action::getName).collect(Collectors.joining("、"));
             throw new ServerException("actions: " + actionNames + ", 正在使用此action");
